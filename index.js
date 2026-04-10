@@ -3,28 +3,29 @@ const mysql = require('mysql2');
 const cors = require('cors');
 
 const app = express();
-app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(cors());
 
-// --- DATABASE CONNECTION ---
-// O Railway preenche essas variáveis automaticamente
+// --- CONEXÃO USANDO O LINK DIRETO (MAIS GARANTIDO NO RAILWAY) ---
+// O Railway fornece a variável MYSQL_URL automaticamente se você conectar o serviço de banco
+const connectionUri = process.env.MYSQL_URL || `mysql://${process.env.MYSQLUSER}:${process.env.MYSQLPASSWORD}@${process.env.MYSQLHOST}:${process.env.MYSQLPORT}/${process.env.MYSQLDATABASE}`;
+
+console.log("Iniciando pool de conexão...");
+
 const pool = mysql.createPool({
-    host: process.env.MYSQLHOST || 'localhost',
-    user: process.env.MYSQLUSER || 'root',
-    password: process.env.MYSQLPASSWORD || '',
-    database: process.env.MYSQLDATABASE || 'railway',
-    port: process.env.MYSQLPORT || 3306,
+    uri: connectionUri,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
 });
-
 const promisePool = pool.promise();
 
-// --- INICIALIZAR TABELA ---
-async function initDB() {
+// Tenta criar a tabela e testar a conexão
+async function testConnection() {
     try {
+        await promisePool.query("SELECT 1");
+        console.log("✅ Conexão com o Banco OK!");
+        
         await promisePool.query(`
             CREATE TABLE IF NOT EXISTS players_online (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -32,52 +33,49 @@ async function initDB() {
                 last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         `);
-        console.log("Banco de dados pronto!");
+        console.log("✅ Tabela players_online verificada!");
     } catch (err) {
-        console.error("ERRO DE CONEXÃO NO BANCO:", err.message);
+        console.error("❌ ERRO NO BANCO:", err.message);
         console.log("Tentando novamente em 5 segundos...");
-        setTimeout(initDB, 5000); // Tenta novamente se falhar (comum no boot do Railway)
+        setTimeout(testConnection, 5000);
     }
 }
-initDB();
+testConnection();
 
-// --- ENDPOINTS ---
+// --- ROTAS ---
 
-// Check-in
 app.post('/check_in', async (req, res) => {
     const { username } = req.body;
-    if (!username) return res.status(400).json({ status: "error", message: "Missing username" });
-
+    if (!username) return res.status(400).send("Falta username");
     try {
         await promisePool.query(`
             INSERT INTO players_online (username, last_seen) 
-            VALUES (?, CURRENT_TIMESTAMP) 
-            ON DUPLICATE KEY UPDATE last_seen = CURRENT_TIMESTAMP
+            VALUES (?, NOW()) 
+            ON DUPLICATE KEY UPDATE last_seen = NOW()
         `, [username]);
-        res.json({ status: "success", message: "Check-in successful" });
+        res.json({ status: "success" });
     } catch (err) {
-        res.status(500).json({ status: "error", message: err.message });
+        console.error("Erro no check_in:", err.message);
+        res.status(500).json({ error: err.message });
     }
 });
 
-// Get Players
 app.get('/players', async (req, res) => {
     try {
         const [rows] = await promisePool.query(`
             SELECT username FROM players_online 
             WHERE last_seen > DATE_SUB(NOW(), INTERVAL 2 MINUTE)
         `);
-        const players = rows.map(r => r.username);
-        res.json({ status: "success", players });
+        res.json({ status: "success", players: rows.map(r => r.username) });
     } catch (err) {
-        res.status(500).json({ status: "error", message: err.message });
+        console.error("Erro no fetch players:", err.message);
+        res.status(500).json({ error: err.message });
     }
 });
 
-// Rota padrão para teste
-app.get('/', (req, res) => res.send("Servidor Multiplayer Rodando!"));
+app.get('/', (req, res) => res.send("Servidor Ativo e Conectado!"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Servidor ouvindo na porta ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
