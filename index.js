@@ -6,26 +6,23 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// --- VERIFICAÇÃO DE SEGURANÇA ---
+// --- MAPEAMENTO DE VARIÁVEIS DO RAILWAY ---
+// Verificando os nomes que aparecem no seu print (DB_HOST, DB_USER, etc)
 const dbConfig = {
-    host: process.env.MYSQLHOST,
-    user: process.env.MYSQLUSER,
-    password: process.env.MYSQLPASSWORD,
-    database: process.env.MYSQLDATABASE,
-    port: process.env.MYSQLPORT || 3306
+    host: process.env.DB_HOST || process.env.MYSQLHOST || 'localhost',
+    user: process.env.DB_USER || process.env.MYSQLUSER || 'root',
+    password: process.env.DB_PASSWORD || process.env.MYSQLPASSWORD || '',
+    database: process.env.DB_NAME || process.env.MYSQLDATABASE || 'railway',
+    port: process.env.DB_PORT || process.env.MYSQLPORT || 3306
 };
 
-// Se não houver host, o Railway ainda não conectou o banco
-if (!dbConfig.host) {
-    console.error("⚠️ ALERTA: Nenhuma variável de banco de dados encontrada!");
-    console.error("DICA: Vá no painel do Railway e use 'Connect Database' nas variáveis do seu serviço.");
-}
+console.log("Tentando conexão detalhada em:", dbConfig.host);
 
 const pool = mysql.createPool({
-    host: dbConfig.host || 'localhost',
-    user: dbConfig.user || 'root',
-    password: dbConfig.password || '',
-    database: dbConfig.database || 'railway',
+    host: dbConfig.host,
+    user: dbConfig.user,
+    password: dbConfig.password,
+    database: dbConfig.database,
     port: dbConfig.port,
     waitForConnections: true,
     connectionLimit: 10,
@@ -34,11 +31,6 @@ const pool = mysql.createPool({
 const promisePool = pool.promise();
 
 async function testConnection() {
-    if (!dbConfig.host) {
-        console.log("Aguardando variáveis do banco... tentando novamente em 10s");
-        setTimeout(testConnection, 10000);
-        return;
-    }
     try {
         await promisePool.query("SELECT 1");
         console.log("✅ BANCO DE DADOS CONECTADO COM SUCESSO!");
@@ -67,7 +59,8 @@ app.post('/check_in', async (req, res) => {
         `, [username]);
         res.json({ status: "success" });
     } catch (err) {
-        res.status(500).json({ error: "Erro interno" });
+        console.error("Erro no Query:", err.message);
+        res.status(500).json({ error: "Erro na gravação do banco", details: err.message });
     }
 });
 
@@ -76,14 +69,11 @@ app.get('/players', async (req, res) => {
         const [rows] = await promisePool.query("SELECT username FROM players_online WHERE last_seen > DATE_SUB(NOW(), INTERVAL 2 MINUTE)");
         res.json({ status: "success", players: rows.map(r => r.username) });
     } catch (err) {
-        res.status(500).json({ error: "Erro" });
+        res.status(500).json({ error: "Erro na leitura do banco" });
     }
 });
 
-app.get('/', (req, res) => {
-    if (!dbConfig.host) return res.send("Servidor rodando, mas BANCO DE DADOS DESCONECTADO (Sem variáveis).");
-    res.send("Servidor Multiplayer Railway Ativo!");
-});
+app.get('/', (req, res) => res.send("Servidor Multiplayer Godot OK!"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Porta: ${PORT}`));
