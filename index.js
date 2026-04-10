@@ -24,14 +24,20 @@ const promisePool = pool.promise();
 
 // --- INICIALIZAR TABELA ---
 async function initDB() {
-    await promisePool.query(`
-        CREATE TABLE IF NOT EXISTS players_online (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(50) UNIQUE NOT NULL,
-            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        )
-    `);
-    console.log("Banco de dados pronto!");
+    try {
+        await promisePool.query(`
+            CREATE TABLE IF NOT EXISTS players_online (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        `);
+        console.log("Banco de dados pronto!");
+    } catch (err) {
+        console.error("ERRO DE CONEXÃO NO BANCO:", err.message);
+        console.log("Tentando novamente em 5 segundos...");
+        setTimeout(initDB, 5000); // Tenta novamente se falhar (comum no boot do Railway)
+    }
 }
 initDB();
 
