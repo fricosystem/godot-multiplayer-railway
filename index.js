@@ -34,7 +34,7 @@ async function initDB() {
         `);
         console.log("Banco de dados pronto!");
     } catch (err) {
-        console.error("ERRO DE CONEXÃO NO BANCO:", err.message);
+        console.error("ERRO DE CONEXÃO NO BANCO:", err);
         console.log("Tentando novamente em 5 segundos...");
         setTimeout(initDB, 5000); // Tenta novamente se falhar (comum no boot do Railway)
     }
