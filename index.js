@@ -21,22 +21,17 @@ const promisePool = pool.promise();
 // Inicializa tabelas
 async function initDB() {
     try {
-        await promisePool.query("SELECT 1");
-        // Tabela de Jogadores Online (para o teste anterior)
-        await promisePool.query(`CREATE TABLE IF NOT EXISTS players_online (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(50) UNIQUE NOT NULL, last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)`);
-        
-        // NOVA Tabela de Salas
         await promisePool.query(`
             CREATE TABLE IF NOT EXISTS rooms (
                 room_id VARCHAR(10) PRIMARY KEY,
                 host_ip VARCHAR(50) NOT NULL,
                 room_name VARCHAR(50),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                host_name VARCHAR(50),
+                last_ping TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         `);
         console.log("✅ BANCO DE DADOS PRONTO!");
     } catch (err) {
-        console.error("❌ ERRO NO BANCO:", err.message);
         setTimeout(initDB, 5000);
     }
 }
@@ -44,12 +39,22 @@ initDB();
 
 // --- API DE SALAS ---
 
-// Criar Sala
+// Criar/Atualizar Sala
 app.post('/create_room', async (req, res) => {
-    const { room_id, host_ip, room_name } = req.body;
+    const { room_id, host_ip, room_name, host_name } = req.body;
     try {
-        await promisePool.query("REPLACE INTO rooms (room_id, host_ip, room_name) VALUES (?, ?, ?)", [room_id, host_ip, room_name]);
+        await promisePool.query("REPLACE INTO rooms (room_id, host_ip, room_name, host_name) VALUES (?, ?, ?, ?)", [room_id, host_ip, room_name, host_name]);
         res.json({ status: "success" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Listar Salas Ativas (últimos 5 minutos)
+app.get('/list_rooms', async (req, res) => {
+    try {
+        const [rows] = await promisePool.query("SELECT room_id, room_name, host_name FROM rooms WHERE last_ping > DATE_SUB(NOW(), INTERVAL 5 MINUTE)");
+        res.json({ status: "success", rooms: rows });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -59,25 +64,16 @@ app.post('/create_room', async (req, res) => {
 app.get('/get_room/:id', async (req, res) => {
     try {
         const [rows] = await promisePool.query("SELECT host_ip FROM rooms WHERE room_id = ?", [req.params.id]);
-        if (rows.length > 0) {
-            res.json({ status: "success", host_ip: rows[0].host_ip });
-        } else {
-            res.status(404).json({ status: "error", message: "Sala não encontrada" });
-        }
+        if (rows.length > 0) res.json({ status: "success", host_ip: rows[0].host_ip });
+        else res.status(404).json({ error: "Sala não encontrada" });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Endpoint para o Godot descobrir o próprio IP público (MUITO ÚTIL)
 app.get('/my_ip', (req, res) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     res.json({ ip: ip.split(',')[0] });
 });
 
-// Mantive os antigos para não quebrar compatibilidade
-app.post('/check_in', async (req, res) => { /* ... código anterior ... */ });
-app.get('/players', async (req, res) => { /* ... código anterior ... */ });
-
-app.get('/', (req, res) => res.send("Matchmaker Horror Ativo!"));
 app.listen(process.env.PORT || 3000, '0.0.0.0');
