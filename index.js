@@ -18,53 +18,53 @@ const dbConfig = {
 const pool = mysql.createPool(dbConfig);
 const promisePool = pool.promise();
 
-// Inicializa tabelas
+// Inicializa tabelas (Garantindo que a tabela de salas esteja sempre certa)
 async function initDB() {
     try {
         await promisePool.query(`
-            CREATE TABLE IF NOT EXISTS rooms (
+            CREATE TABLE IF NOT EXISTS server_rooms (
                 room_id VARCHAR(10) PRIMARY KEY,
                 host_ip VARCHAR(50) NOT NULL,
-                room_name VARCHAR(50),
                 host_name VARCHAR(50),
                 last_ping TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         `);
-        console.log("✅ BANCO DE DADOS PRONTO!");
+        console.log("✅ Servidor de Matchmaking Pronto!");
     } catch (err) {
+        console.error("Erro no DB:", err.message);
         setTimeout(initDB, 5000);
     }
 }
 initDB();
 
-// --- API DE SALAS ---
+// --- API DE CONEXÃO ---
 
-// Criar/Atualizar Sala
+// Criar Sala (O Godot envia o ID e o HOST_IP que ele detectou)
 app.post('/create_room', async (req, res) => {
-    const { room_id, host_ip, room_name, host_name } = req.body;
+    const { room_id, host_ip, host_name } = req.body;
     try {
-        await promisePool.query("REPLACE INTO rooms (room_id, host_ip, room_name, host_name) VALUES (?, ?, ?, ?)", [room_id, host_ip, room_name, host_name]);
+        await promisePool.query("REPLACE INTO server_rooms (room_id, host_ip, host_name) VALUES (?, ?, ?)", [room_id, host_ip, host_name]);
         res.json({ status: "success" });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Listar Salas Ativas (últimos 5 minutos)
+// Listar todas as salas ativas nos últimos 10 minutos
 app.get('/list_rooms', async (req, res) => {
     try {
-        const [rows] = await promisePool.query("SELECT room_id, room_name, host_name FROM rooms WHERE last_ping > DATE_SUB(NOW(), INTERVAL 5 MINUTE)");
+        const [rows] = await promisePool.query("SELECT * FROM server_rooms WHERE last_ping > DATE_SUB(NOW(), INTERVAL 10 MINUTE)");
         res.json({ status: "success", rooms: rows });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Buscar IP da Sala
+// Pegar dados de uma sala específica
 app.get('/get_room/:id', async (req, res) => {
     try {
-        const [rows] = await promisePool.query("SELECT host_ip FROM rooms WHERE room_id = ?", [req.params.id]);
-        if (rows.length > 0) res.json({ status: "success", host_ip: rows[0].host_ip });
+        const [rows] = await promisePool.query("SELECT host_ip FROM server_rooms WHERE room_id = ?", [req.params.id]);
+        if (rows.length > 0) res.json({ host_ip: rows[0].host_ip });
         else res.status(404).json({ error: "Sala não encontrada" });
     } catch (err) {
         res.status(500).json({ error: err.message });
