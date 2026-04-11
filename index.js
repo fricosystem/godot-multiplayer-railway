@@ -21,6 +21,9 @@ const promisePool = pool.promise();
 // Inicializa tabelas
 async function initDB() {
     try {
+        console.log("⏳ Tentando conectar ao banco de dados...");
+        
+        // Tabela de Salas
         await promisePool.query(`
             CREATE TABLE IF NOT EXISTS server_rooms (
                 room_id VARCHAR(10) PRIMARY KEY,
@@ -30,9 +33,23 @@ async function initDB() {
                 last_ping TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         `);
-        console.log("✅ Banco de Dados Pronto!");
+        
+        // Tabela de Jogadores Globais (Persistência por IP)
+        await promisePool.query(`
+            CREATE TABLE IF NOT EXISTS global_players (
+                ip VARCHAR(50) PRIMARY KEY,
+                username VARCHAR(50) NOT NULL,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Migração de colunas faltantes
+        try { await promisePool.query("ALTER TABLE server_rooms ADD COLUMN local_ip VARCHAR(50)"); } catch(e){}
+        try { await promisePool.query("ALTER TABLE server_rooms ADD COLUMN host_name VARCHAR(50)"); } catch(e){}
+
+        console.log("✅ Banco de Dados Pronto e Tabelas Atualizadas!");
     } catch (err) {
-        console.error("❌ Erro ao iniciar DB:", err.message);
+        console.error("❌ Erro CRÍTICO ao iniciar DB:", err.message);
         setTimeout(initDB, 5000);
     }
 }
@@ -40,25 +57,73 @@ initDB();
 
 // --- API DE CONEXÃO ---
 
+// 1. Check-in de Jogador (Persistência e Presença Global)
+app.post('/check_in', async (req, res) => {
+    const { username } = req.body;
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const cleanIp = ip.split(',')[0].trim();
+
+    try {
+        await promisePool.query(
+            "REPLACE INTO global_players (ip, username, last_seen) VALUES (?, ?, NOW())",
+            [cleanIp, username]
+        );
+        console.log(`👤 Jogador ${username} fez check-in (IP: ${cleanIp})`);
+        res.json({ status: "success", username: username });
+    } catch (err) {
+        console.error("❌ Erro no check-in:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2. Buscar nome salvo pelo IP
+app.get('/get_my_name', async (req, res) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const cleanIp = ip.split(',')[0].trim();
+
+    try {
+        const [rows] = await promisePool.query("SELECT username FROM global_players WHERE ip = ?", [cleanIp]);
+        if (rows.length > 0) {
+            res.json({ username: rows[0].username, ip: cleanIp });
+        } else {
+            res.json({ username: "", ip: cleanIp });
+        }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 3. Listar todos os jogadores online (vistos nos últimos 10 minutos)
+app.get('/global_players', async (req, res) => {
+    try {
+        const [rows] = await promisePool.query(
+            "SELECT username FROM global_players WHERE last_seen > DATE_SUB(NOW(), INTERVAL 10 MINUTE) ORDER BY last_seen DESC"
+        );
+        res.json({ players: rows });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/create_room', async (req, res) => {
     const { room_id, host_ip, local_ip, host_name } = req.body;
     try {
-        // Usa REPLACE para atualizar se o room_id já existir
         await promisePool.query(
             "REPLACE INTO server_rooms (room_id, host_ip, local_ip, host_name, last_ping) VALUES (?, ?, ?, ?, NOW())", 
             [room_id, host_ip, local_ip, host_name]
         );
+        console.log(`🏠 Sala ${room_id} criada por ${host_name}`);
         res.json({ status: "success" });
     } catch (err) {
+        console.error("❌ Erro ao criar sala:", err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
 app.get('/list_rooms', async (req, res) => {
     try {
-        // Lista apenas salas ativas nos últimos 5 minutos
-        const [rows] = await promisePool.query("SELECT * FROM server_rooms WHERE last_ping > DATE_SUB(NOW(), INTERVAL 5 MINUTE) ORDER BY last_ping DESC");
-        res.json({ status: "success", rooms: rows });
+        const [rows] = await promisePool.query("SELECT * FROM server_rooms WHERE last_ping > DATE_SUB(NOW(), INTERVAL 5 MINUTE)");
+        res.json({ rooms: rows });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -67,26 +132,34 @@ app.get('/list_rooms', async (req, res) => {
 app.get('/get_room/:id', async (req, res) => {
     try {
         const [rows] = await promisePool.query("SELECT host_ip, local_ip FROM server_rooms WHERE room_id = ?", [req.params.id]);
-        if (rows.length > 0) {
-            res.json(rows[0]);
-        } else {
-            res.status(404).json({ error: "Sala não encontrada ou expirada" });
-        }
+        if (rows.length > 0) res.json(rows[0]);
+        else res.status(404).json({ error: "Sala não encontrada" });
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+} );
+
+// 4. Limpar o Banco de Dados (Salas e Jogadores Antigos)
+app.post('/clear_db', async (req, res) => {
+    try {
+        await promisePool.query("DELETE FROM server_rooms");
+        await promisePool.query("DELETE FROM global_players");
+        console.log("🧹 Banco de dados limpo pelo usuário!");
+        res.json({ status: "success", message: "O além foi purificado!" });
+    } catch (err) {
+        console.error("❌ Erro ao limpar DB:", err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
 app.get('/my_ip', (req, res) => {
-    // Captura o IP real do cliente, considerando proxies (como o do Railway/Cloudflare)
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const cleanIp = ip.split(',')[0].trim();
     res.json({ ip: cleanIp });
 });
 
-// Rota de saúde para o Railway
 app.get('/', (req, res) => {
-    res.send("Servidor de Lobby de Terror Online Ativo!");
+    res.send("<h1>Servidor de Lobby de Terror Online</h1><p>Status: Ativo e Amaldiçoado</p>");
 });
 
 const PORT = process.env.PORT || 3000;
